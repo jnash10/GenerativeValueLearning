@@ -3,9 +3,19 @@ import PIL.Image
 from typing import List
 import PIL.Image
 import google.generativeai as genai
-from .vlm import VLM
 from .prompt import Prompt
 from .helpers import to_base64
+from dataclasses import dataclass
+
+
+@dataclass
+class VLMOutput:
+    """Output from VLM containing frame information and evaluation."""
+
+    frame_no: int
+    frame: PIL.Image
+    description: str
+    value: float
 
 
 class VLM:
@@ -83,6 +93,8 @@ class GeminiVLM(VLM):
         Returns:
             Formatted prompt string
         """
+        self.inference_frames = inference_frames
+        self.teacher_frames = teacher_frames
         # Convert images to base64 strings
         inference_b64 = to_base64(inference_frames)
         teacher_b64 = (
@@ -98,12 +110,12 @@ class GeminiVLM(VLM):
 
         return self.current_prompt
 
-    def call_VLM(self) -> List[float]:
+    def call_VLM(self) -> List[VLMOutput]:
         """
         Call the Gemini model and parse the response for frame values.
 
         Returns:
-            List of computed values for each frame
+            List of DataClass objects containing frame number, frame image, description and value
         """
         if not self.current_prompt:
             raise ValueError("Prompt must be formatted before calling VLM")
@@ -112,17 +124,34 @@ class GeminiVLM(VLM):
         response = self.model.generate_content(self.current_prompt)
 
         # Parse the response text to extract values
-        values = []
+        results = []
+        frame_num = 0
         for line in response.text.split("\n"):
             if "Task Completion Percentages:" in line:
-                # Extract percentage value and convert to float
                 try:
+                    # Extract frame number
+                    frame_num = int(line.split("[")[1].split("]")[0])
+
+                    # Extract description
+                    description = (
+                        line.split("Description:")[1]
+                        .split("Task Completion Percentages:")[0]
+                        .strip()
+                    )
+
+                    # Extract and normalize value
                     value_str = line.split("Task Completion Percentages:")[1].strip()
-                    value = float(value_str.rstrip("%"))
-                    values.append(
-                        value / 100.0
-                    )  # Convert percentage to float between 0 and 1
+                    value = float(value_str.rstrip("%")) / 100.0
+
+                    # Create DataClass instance
+                    result = VLMOutput(
+                        frame_no=frame_num,
+                        frame=self.inference_frames[frame_num - 1],
+                        description=description,
+                        value=value,
+                    )
+                    results.append(result)
                 except (ValueError, IndexError):
                     continue
 
-        return values
+        return results
